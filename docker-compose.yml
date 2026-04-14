@@ -1,0 +1,26 @@
+services:
+
+  # Ollama runs NATIVELY on Windows (not in Docker) to use your RTX 3060 GPU directly.
+  # Download from: https://ollama.com/download
+  # After installing, run: ollama pull llama3
+
+  orchestrator:
+    build: ./orchestrator
+    container_name: colegios_orchestrator
+    ports:
+      - "8000:8000"
+    environment:
+      # Points to Ollama running natively on the Windows host
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:alpine
+    container_name: colegios_frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    restart: unless-stopped

@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Virtual Lab Assistant — Proyecto Colegios</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --accent: #4f8ef7;
+    --accent2: #7c3aed;
+    --green: #22c55e;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #2d3748;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --mono: 'Cascadia Code', 'Fira Code', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+
+  /* HEADER */
+  header {
+    background: linear-gradient(135deg, #1a1d27 0%, #22263a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo { display: flex; align-items: center; gap: 12px; }
+  .logo-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .logo h1 { font-size: 18px; font-weight: 700; }
+  .logo p { font-size: 12px; color: var(--muted); }
+  .status-badge {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 14px; border-radius: 999px; font-size: 13px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* AGENTS BAR */
+  .agents-bar {
+    display: flex; gap: 12px; padding: 16px 32px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .agent-chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface2); border: 1px solid var(--border);
+    padding: 8px 16px; border-radius: 8px; font-size: 13px;
+    white-space: nowrap; transition: all 0.2s;
+  }
+  .agent-chip.active { border-color: var(--accent); background: rgba(79,142,247,0.1); }
+  .agent-chip .icon { font-size: 18px; }
+  .agent-chip .label { font-weight: 600; }
+  .agent-chip .sub { color: var(--muted); font-size: 11px; }
+
+  /* MAIN LAYOUT */
+  .main { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh - 140px); }
+
+  /* CHAT PANEL */
+  .chat-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .chat-messages { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 20px; }
+
+  .message { display: flex; gap: 12px; max-width: 85%; }
+  .message.user { align-self: flex-end; flex-direction: row-reverse; }
+  .message.bot { align-self: flex-start; }
+
+  .avatar {
+    width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .message.user .avatar { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .message.bot .avatar { background: linear-gradient(135deg, #059669, #047857); }
+
+  .bubble {
+    padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.6;
+  }
+  .message.user .bubble { background: linear-gradient(135deg, var(--accent), #3b6fd4); color: white; border-radius: 12px 4px 12px 12px; }
+  .message.bot .bubble { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px 12px 12px 12px; }
+
+  .code-block {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin: 8px 0; font-family: var(--mono); font-size: 12px;
+    overflow-x: auto; white-space: pre;
+  }
+
+  /* INPUT */
+  .chat-input {
+    padding: 16px 32px; border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .input-row { display: flex; gap: 10px; }
+  .input-row textarea {
+    flex: 1; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px; padding: 12px 16px;
+    font-family: var(--font); font-size: 14px; resize: none;
+    transition: border-color 0.2s; outline: none;
+  }
+  .input-row textarea:focus { border-color: var(--accent); }
+  .btn-send {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; color: white; border-radius: 10px;
+    padding: 12px 20px; cursor: pointer; font-size: 18px;
+    transition: opacity 0.2s;
+  }
+  .btn-send:hover { opacity: 0.85; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .presets { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .preset-btn {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 6px; padding: 5px 10px;
+    font-size: 12px; cursor: pointer; transition: all 0.2s;
+  }
+  .preset-btn:hover { border-color: var(--accent); color: var(--text); }
+
+  /* PIPELINE PANEL */
+  .pipeline-panel { overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .panel-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+
+  .pipeline-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .pipeline-card .card-header {
+    padding: 10px 14px; font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .pipeline-card .card-body { padding: 12px 14px; }
+
+  .step-list { display: flex; flex-direction: column; gap: 6px; }
+  .step-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12px; color: var(--muted); line-height: 1.5;
+  }
+  .step-item.active { color: var(--text); }
+  .step-item.done { color: var(--green); }
+  .step-dot {
+    width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+    border: 2px solid var(--border); margin-top: 1px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+  }
+  .step-item.active .step-dot { border-color: var(--accent); background: rgba(79,142,247,0.2); }
+  .step-item.done .step-dot { border-color: var(--green); background: rgba(34,197,94,0.2); color: var(--green); }
+
+  .score-bar { display: flex; flex-direction: column; gap: 6px; }
+  .score-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .score-label { width: 80px; color: var(--muted); }
+  .score-track { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; background: var(--border); }
+  .score-fill.winner { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .score-val { width: 42px; text-align: right; color: var(--muted); }
+
+  .chunk-list { display: flex; flex-direction: column; gap: 8px; }
+  .chunk-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .chunk-score { color: var(--accent); font-weight: 600; margin-bottom: 4px; }
+
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 40px 20px; font-size: 13px; }
+  .empty-state .big { font-size: 40px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon" style="font-size:13px;font-weight:700;letter-spacing:-0.5px;">AI</div>
+    <div>
+      <h1>Virtual Lab Assistant</h1>
+      <p>Proyecto Colegios</p>
+    </div>
+  </div>
+  <div class="status-badge">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="agents-bar">
+  <div class="agent-chip" id="chip-vhdl">
+    <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">HDL</span>
+    <div>
+      <div class="label">VHDL/Verilog Agent</div>
+      <div class="sub">Synchronous Design · Synthesis</div>
+    </div>
+  </div>
+  <div class="agent-chip" id="chip-rf">
+    <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">RF</span>
+    <div>
+      <div class="label">RF Signal Analysis Agent</div>
+      <div class="sub">Modulation · Spectrum · Antennas</div>
+    </div>
+  </div>
+  <div class="agent-chip" id="chip-network">
+    <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">NET</span>
+    <div>
+      <div class="label">Network Protocol Agent</div>
+      <div class="sub">TCP/IP · Routing · Protocols</div>
+    </div>
+  </div>
+  <div class="agent-chip" style="margin-left:auto; opacity:0.5">
+    <span class="icon" style="font-size:11px;font-weight:700;color:var(--muted);">ORC</span>
+    <div>
+      <div class="label">Docker Orchestrator</div>
+      <div class="sub">FastAPI · FAISS · RAG</div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <!-- CHAT -->
+  <div class="chat-panel">
+    <div class="chat-messages" id="chatMessages">
+      <div class="message bot">
+        <div class="avatar" style="font-size:11px;font-weight:700;">BOT</div>
+        <div class="bubble">
+          Hello! I am your Virtual Lab Assistant, powered by a Dockerized multi-agent LLM architecture.<br><br>
+          I specialize in <strong>VHDL/Verilog</strong>, <strong>RF Signal Analysis</strong>, and <strong>Network Protocols</strong>. I won't give you direct answers — instead, I'll guide you with Socratic questions so you truly understand the concept.<br><br>
+          What are you working on today?
+        </div>
+      </div>
+    </div>
+    <div class="chat-input">
+      <div class="presets">
+        <span style="font-size:12px;color:var(--muted);align-self:center;">Quick demos:</span>
+        <button class="preset-btn" onclick="usePreset('vhdl')">VHDL Counter Bug</button>
+        <button class="preset-btn" onclick="usePreset('rf')">AM Modulation</button>
+        <button class="preset-btn" onclick="usePreset('network')">OSPF vs RIP</button>
+      </div>
+      <div class="input-row">
+        <textarea id="queryInput" rows="3" placeholder="Describe your problem or paste your VHDL code here..."></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendQuery()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PIPELINE -->
+  <div class="pipeline-panel">
+    <div class="panel-title">Internal Pipeline</div>
+
+    <!-- Processing Steps -->
+    <div class="pipeline-card">
+      <div class="card-header">Processing Steps</div>
+      <div class="card-body">
+        <div class="step-list" id="stepList">
+          <div class="empty-state"><div style="margin-bottom:10px;font-size:13px;font-weight:600;">[ Pipeline ]</div>Send a query to see<br>the pipeline in action</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Routing Scores -->
+    <div class="pipeline-card">
+      <div class="card-header">Semantic Routing Scores</div>
+      <div class="card-body">
+        <div class="score-bar" id="scoreBar">
+          <div class="empty-state" style="padding:10px 0;font-size:12px;">Awaiting query...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RAG Chunks -->
+    <div class="pipeline-card">
+      <div class="card-header">Retrieved Knowledge Chunks</div>
+      <div class="card-body">
+        <div class="chunk-list" id="chunkList">
+          <div class="empty-state" style="padding:10px 0;font-size:12px;">No retrieval yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "http://localhost:8000";
+
+const PRESETS = {
+  vhdl: `I am designing a 4-bit counter in VHDL. My code synthesizes correctly but the simulation output stays in an undefined 'U' state. Here is my code:\n\narchitecture behavioral of simple_counter is\n  signal count : unsigned(3 downto 0) := "0000";\nbegin\n  process(clk, reset, count)\n  begin\n    if reset = '1' then count <= "0000";\n    elsif rising_edge(clk) then count <= count + 1;\n    end if;\n  end process;\n  q_out <= std_logic_vector(count);\nend behavioral;\n\nWhy is my simulation producing undefined values?`,
+  rf: `I need to understand AM modulation. I know the carrier frequency is 100 MHz and the message frequency is 5 kHz. How do I calculate the bandwidth of the modulated signal and what does the spectrum look like?`,
+  network: `My professor asked me to compare OSPF and RIP for a large enterprise network. I know both are routing protocols but I don't understand when to choose one over the other. Can you help?`
+};
+
+function usePreset(key) {
+  document.getElementById("queryInput").value = PRESETS[key];
+}
+
+async function checkStatus() {
+  try {
+    const r = await fetch(`${API}/health`);
+    if (r.ok) {
+      document.getElementById("statusDot").style.background = "var(--green)";
+      document.getElementById("statusText").textContent = "System Online";
+    }
+  } catch {
+    document.getElementById("statusDot").style.background = "var(--red)";
+    document.getElementById("statusText").textContent = "Offline";
+  }
+}
+
+function addMessage(role, content) {
+  const container = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = `message ${role}`;
+  const avatar = role === "user" ? "YOU" : "BOT";
+  div.innerHTML = `
+    <div class="avatar">${avatar}</div>
+    <div class="bubble">${content.replace(/\n/g, "<br>")}</div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function addThinking() {
+  const container = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "message bot";
+  div.id = "thinkingMsg";
+  div.innerHTML = `
+    <div class="avatar" style="font-size:11px;font-weight:700;">BOT</div>
+    <div class="bubble" style="color:var(--muted)">
+      <div class="spinner"></div> Processing your query through the pipeline...
+    </div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeThinking() {
+  const el = document.getElementById("thinkingMsg");
+  if (el) el.remove();
+}
+
+function renderSteps(steps, loading = false) {
+  const el = document.getElementById("stepList");
+  el.innerHTML = steps.map((s, i) => `
+    <div class="step-item done">
+      <div class="step-dot">✓</div>
+      <span>${s}</span>
+    </div>
+  `).join("") + (loading ? `<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Generating Socratic response...</span></div>` : "");
+}
+
+function renderScores(scores, winner) {
+  const el = document.getElementById("scoreBar");
+  const maxScore = Math.max(...Object.values(scores));
+  const minScore = Math.min(...Object.values(scores));
+  const range = maxScore - minScore || 1;
+  // Normalize: winner shows ~85-95%, others proportionally lower
+  el.innerHTML = Object.entries(scores).map(([domain, score]) => {
+    const normalized = 40 + ((score - minScore) / range) * 55;
+    const pct = normalized.toFixed(0);
+    const displayPct = (normalized).toFixed(1);
+    const isWinner = domain === winner;
+    const labels = { vhdl: "VHDL Agent", rf: "RF Agent", network: "Net Agent" };
+    return `
+      <div class="score-row">
+        <span class="score-label">${labels[domain] || domain}</span>
+        <div class="score-track">
+          <div class="score-fill ${isWinner ? 'winner' : ''}" style="width:${pct}%"></div>
+        </div>
+        <span class="score-val">${displayPct}%</span>
+      </div>
+    `;
+  }).join("");
+
+  // Highlight active agent chip
+  document.querySelectorAll(".agent-chip").forEach(c => c.classList.remove("active"));
+  const chipMap = { vhdl: "chip-vhdl", rf: "chip-rf", network: "chip-network" };
+  const chipEl = document.getElementById(chipMap[winner]);
+  if (chipEl) chipEl.classList.add("active");
+}
+
+function renderChunks(chunks) {
+  const el = document.getElementById("chunkList");
+  if (!chunks || chunks.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">No chunks retrieved</div>';
+    return;
+  }
+  el.innerHTML = chunks.map((c, i) => `
+    <div class="chunk-item">
+      <div class="chunk-score">Chunk ${i+1} — similarity: ${c.score}</div>
+      ${c.text}
+    </div>
+  `).join("");
+}
+
+async function sendQuery() {
+  const input = document.getElementById("queryInput");
+  const btn = document.getElementById("sendBtn");
+  const query = input.value.trim();
+  if (!query) return;
+
+  input.value = "";
+  btn.disabled = true;
+  addMessage("user", query);
+  addThinking();
+
+  // Reset pipeline panel
+  document.getElementById("stepList").innerHTML = '<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Initializing pipeline...</span></div>';
+  document.getElementById("scoreBar").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Computing...</div>';
+  document.getElementById("chunkList").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Retrieving...</div>';
+
+  try {
+    renderSteps(["Semantic routing — analyzing query intent..."], true);
+
+    const r = await fetch(`${API}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query })
+    });
+
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+
+    removeThinking();
+    renderSteps(data.steps);
+    renderScores(data.routing.scores, data.routing.domain);
+    renderChunks(data.retrieved_chunks);
+
+    const agentLabel = data.routing.agent;
+    const scores = Object.values(data.routing.scores);
+    const minS = Math.min(...scores), maxS = Math.max(...scores);
+    const normConf = (40 + ((data.routing.confidence - minS) / (maxS - minS || 1)) * 55).toFixed(1);
+    addMessage("bot",
+      `<strong>[${agentLabel}]</strong> — Routing confidence: ${normConf}%<br><br>${data.llm_response}`
+    );
+  } catch (err) {
+    removeThinking();
+    addMessage("bot", `<span style="color:var(--red)">System error: ${err.message}. Make sure the orchestrator is running.</span>`);
+    document.getElementById("stepList").innerHTML = `<div class="step-item" style="color:var(--red)"><div class="step-dot">✗</div><span>${err.message}</span></div>`;
+  }
+
+  btn.disabled = false;
+  input.focus();
+}
+
+document.getElementById("queryInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+});
+
+checkStatus();
+setInterval(checkStatus, 10000);
+</script>
+</body>
+</html>
