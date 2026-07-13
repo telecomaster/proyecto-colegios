@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Virtual Lab Assistant — Proyecto Colegios</title>
+<title>Asistente Virtual de Laboratorio — Proyecto Colegios</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -68,7 +68,7 @@
   .main { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh - 140px); }
 
   /* CHAT PANEL */
-  .chat-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .chat-panel { display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; }
   .chat-messages { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 20px; }
 
   .message { display: flex; gap: 12px; max-width: 85%; }
@@ -128,6 +128,11 @@
   /* PIPELINE PANEL */
   .pipeline-panel { overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
   .panel-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .pipeline-toggle {
+    display: none; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 14px; font-size: 13px;
+    cursor: pointer; margin: 8px 32px;
+  }
 
   .pipeline-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .pipeline-card .card-header {
@@ -160,7 +165,7 @@
   .score-track { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
   .score-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; background: var(--border); }
   .score-fill.winner { background: linear-gradient(90deg, var(--accent), var(--accent2)); }
-  .score-val { width: 42px; text-align: right; color: var(--muted); }
+  .score-val { width: 48px; text-align: right; color: var(--muted); }
 
   .chunk-list { display: flex; flex-direction: column; gap: 8px; }
   .chunk-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--muted); line-height: 1.5; }
@@ -171,6 +176,23 @@
 
   .empty-state { text-align: center; color: var(--muted); padding: 40px 20px; font-size: 13px; }
   .empty-state .big { font-size: 40px; margin-bottom: 10px; }
+
+  /* RESPONSIVE: en pantallas angostas (celulares de alumnos) apilamos el
+     panel de pipeline debajo del chat y lo escondemos detras de un boton,
+     porque es informacion de depuracion, no algo que un alumno necesite ver
+     todo el tiempo. */
+  @media (max-width: 860px) {
+    .main { grid-template-columns: 1fr; height: auto; }
+    .chat-panel { border-right: none; height: calc(100vh - 140px); }
+    .pipeline-toggle { display: block; }
+    .pipeline-panel { display: none; }
+    .pipeline-panel.open { display: flex; }
+    header { padding: 12px 16px; }
+    .agents-bar { padding: 12px 16px; }
+    .chat-messages { padding: 16px; }
+    .chat-input { padding: 12px 16px; }
+    .message { max-width: 95%; }
+  }
 </style>
 </head>
 <body>
@@ -179,13 +201,13 @@
   <div class="logo">
     <div class="logo-icon" style="font-size:13px;font-weight:700;letter-spacing:-0.5px;">AI</div>
     <div>
-      <h1>Virtual Lab Assistant</h1>
+      <h1>Asistente Virtual de Laboratorio</h1>
       <p>Proyecto Colegios</p>
     </div>
   </div>
   <div class="status-badge">
     <div class="dot" id="statusDot"></div>
-    <span id="statusText">Connecting...</span>
+    <span id="statusText">Conectando...</span>
   </div>
 </header>
 
@@ -193,28 +215,28 @@
   <div class="agent-chip" id="chip-vhdl">
     <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">HDL</span>
     <div>
-      <div class="label">VHDL/Verilog Agent</div>
-      <div class="sub">Synchronous Design · Synthesis</div>
+      <div class="label">Agente VHDL/Verilog</div>
+      <div class="sub">Diseño síncrono · Síntesis</div>
     </div>
   </div>
   <div class="agent-chip" id="chip-rf">
     <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">RF</span>
     <div>
-      <div class="label">RF Signal Analysis Agent</div>
-      <div class="sub">Modulation · Spectrum · Antennas</div>
+      <div class="label">Agente de Señales RF</div>
+      <div class="sub">Modulación · Espectro · Antenas</div>
     </div>
   </div>
   <div class="agent-chip" id="chip-network">
     <span class="icon" style="font-size:12px;font-weight:700;color:var(--accent);">NET</span>
     <div>
-      <div class="label">Network Protocol Agent</div>
-      <div class="sub">TCP/IP · Routing · Protocols</div>
+      <div class="label">Agente de Redes</div>
+      <div class="sub">TCP/IP · Enrutamiento · Protocolos</div>
     </div>
   </div>
   <div class="agent-chip" style="margin-left:auto; opacity:0.5">
     <span class="icon" style="font-size:11px;font-weight:700;color:var(--muted);">ORC</span>
     <div>
-      <div class="label">Docker Orchestrator</div>
+      <div class="label">Orquestador Docker</div>
       <div class="sub">FastAPI · FAISS · RAG</div>
     </div>
   </div>
@@ -227,56 +249,57 @@
       <div class="message bot">
         <div class="avatar" style="font-size:11px;font-weight:700;">BOT</div>
         <div class="bubble">
-          Hello! I am your Virtual Lab Assistant, powered by a Dockerized multi-agent LLM architecture.<br><br>
-          I specialize in <strong>VHDL/Verilog</strong>, <strong>RF Signal Analysis</strong>, and <strong>Network Protocols</strong>. I won't give you direct answers — instead, I'll guide you with Socratic questions so you truly understand the concept.<br><br>
-          What are you working on today?
+          ¡Hola! Soy tu Asistente Virtual de Laboratorio, con una arquitectura multi-agente basada en IA.<br><br>
+          Me especializo en <strong>VHDL/Verilog</strong>, <strong>Análisis de Señales RF</strong> y <strong>Protocolos de Red</strong>. No te voy a dar la respuesta directa — en cambio, te voy a guiar con preguntas socráticas para que entiendas el concepto de verdad.<br><br>
+          ¿En qué estás trabajando hoy?
         </div>
       </div>
     </div>
     <div class="chat-input">
       <div class="presets">
-        <span style="font-size:12px;color:var(--muted);align-self:center;">Quick demos:</span>
-        <button class="preset-btn" onclick="usePreset('vhdl')">VHDL Counter Bug</button>
-        <button class="preset-btn" onclick="usePreset('rf')">AM Modulation</button>
+        <span style="font-size:12px;color:var(--muted);align-self:center;">Ejemplos rápidos:</span>
+        <button class="preset-btn" onclick="usePreset('vhdl')">Bug en contador VHDL</button>
+        <button class="preset-btn" onclick="usePreset('rf')">Modulación AM</button>
         <button class="preset-btn" onclick="usePreset('network')">OSPF vs RIP</button>
       </div>
       <div class="input-row">
-        <textarea id="queryInput" rows="3" placeholder="Describe your problem or paste your VHDL code here..."></textarea>
-        <button class="btn-send" id="sendBtn" onclick="sendQuery()">Send</button>
+        <textarea id="queryInput" rows="3" placeholder="Describe tu problema o pega tu código VHDL aquí..."></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendQuery()">Enviar</button>
       </div>
     </div>
   </div>
 
   <!-- PIPELINE -->
-  <div class="pipeline-panel">
-    <div class="panel-title">Internal Pipeline</div>
+  <button class="pipeline-toggle" id="pipelineToggle" onclick="togglePipeline()">Mostrar panel interno ▾</button>
+  <div class="pipeline-panel" id="pipelinePanel">
+    <div class="panel-title">Pipeline Interno</div>
 
     <!-- Processing Steps -->
     <div class="pipeline-card">
-      <div class="card-header">Processing Steps</div>
+      <div class="card-header">Pasos de Procesamiento</div>
       <div class="card-body">
         <div class="step-list" id="stepList">
-          <div class="empty-state"><div style="margin-bottom:10px;font-size:13px;font-weight:600;">[ Pipeline ]</div>Send a query to see<br>the pipeline in action</div>
+          <div class="empty-state"><div style="margin-bottom:10px;font-size:13px;font-weight:600;">[ Pipeline ]</div>Envía una consulta para ver<br>el pipeline en acción</div>
         </div>
       </div>
     </div>
 
     <!-- Routing Scores -->
     <div class="pipeline-card">
-      <div class="card-header">Semantic Routing Scores</div>
+      <div class="card-header">Scores de Enrutamiento Semántico</div>
       <div class="card-body">
         <div class="score-bar" id="scoreBar">
-          <div class="empty-state" style="padding:10px 0;font-size:12px;">Awaiting query...</div>
+          <div class="empty-state" style="padding:10px 0;font-size:12px;">Esperando consulta...</div>
         </div>
       </div>
     </div>
 
     <!-- RAG Chunks -->
     <div class="pipeline-card">
-      <div class="card-header">Retrieved Knowledge Chunks</div>
+      <div class="card-header">Fragmentos Recuperados</div>
       <div class="card-body">
         <div class="chunk-list" id="chunkList">
-          <div class="empty-state" style="padding:10px 0;font-size:12px;">No retrieval yet</div>
+          <div class="empty-state" style="padding:10px 0;font-size:12px;">Sin recuperación aún</div>
         </div>
       </div>
     </div>
@@ -284,16 +307,39 @@
 </div>
 
 <script>
-const API = "http://localhost:8000";
+// Ruta relativa: nginx la reenvía al orchestrator (ver frontend/nginx.conf).
+// Así la interfaz funciona igual desde "localhost" que desde la IP de la
+// Raspberry Pi en la red del colegio (ej. desde el celular de un alumno).
+const API = "/api";
 
 const PRESETS = {
-  vhdl: `I am designing a 4-bit counter in VHDL. My code synthesizes correctly but the simulation output stays in an undefined 'U' state. Here is my code:\n\narchitecture behavioral of simple_counter is\n  signal count : unsigned(3 downto 0) := "0000";\nbegin\n  process(clk, reset, count)\n  begin\n    if reset = '1' then count <= "0000";\n    elsif rising_edge(clk) then count <= count + 1;\n    end if;\n  end process;\n  q_out <= std_logic_vector(count);\nend behavioral;\n\nWhy is my simulation producing undefined values?`,
-  rf: `I need to understand AM modulation. I know the carrier frequency is 100 MHz and the message frequency is 5 kHz. How do I calculate the bandwidth of the modulated signal and what does the spectrum look like?`,
-  network: `My professor asked me to compare OSPF and RIP for a large enterprise network. I know both are routing protocols but I don't understand when to choose one over the other. Can you help?`
+  vhdl: `Estoy diseñando un contador de 4 bits en VHDL. Mi código sintetiza correctamente pero la simulación se queda en un estado indefinido 'U'. Este es mi código:\n\narchitecture behavioral of simple_counter is\n  signal count : unsigned(3 downto 0) := "0000";\nbegin\n  process(clk, reset, count)\n  begin\n    if reset = '1' then count <= "0000";\n    elsif rising_edge(clk) then count <= count + 1;\n    end if;\n  end process;\n  q_out <= std_logic_vector(count);\nend behavioral;\n\n¿Por qué mi simulación produce valores indefinidos?`,
+  rf: `Necesito entender la modulación AM. Sé que la frecuencia portadora es 100 MHz y la frecuencia del mensaje es 5 kHz. ¿Cómo calculo el ancho de banda de la señal modulada y cómo se ve el espectro?`,
+  network: `Mi profesor me pidió comparar OSPF y RIP para una red empresarial grande. Sé que ambos son protocolos de enrutamiento pero no entiendo cuándo elegir uno sobre el otro. ¿Me puedes ayudar?`
 };
+
+// Historial de la conversación (solo lo que ve el LLM: usuario/asistente),
+// necesario para que el diálogo socrático tenga contexto entre turnos.
+let conversationHistory = [];
 
 function usePreset(key) {
   document.getElementById("queryInput").value = PRESETS[key];
+}
+
+function togglePipeline() {
+  const panel = document.getElementById("pipelinePanel");
+  const btn = document.getElementById("pipelineToggle");
+  const open = panel.classList.toggle("open");
+  btn.textContent = open ? "Ocultar panel interno ▴" : "Mostrar panel interno ▾";
+}
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function checkStatus() {
@@ -301,22 +347,24 @@ async function checkStatus() {
     const r = await fetch(`${API}/health`);
     if (r.ok) {
       document.getElementById("statusDot").style.background = "var(--green)";
-      document.getElementById("statusText").textContent = "System Online";
+      document.getElementById("statusText").textContent = "Sistema en línea";
+    } else {
+      throw new Error("not ok");
     }
   } catch {
     document.getElementById("statusDot").style.background = "var(--red)";
-    document.getElementById("statusText").textContent = "Offline";
+    document.getElementById("statusText").textContent = "Sin conexión";
   }
 }
 
-function addMessage(role, content) {
+function addMessage(role, htmlContent) {
   const container = document.getElementById("chatMessages");
   const div = document.createElement("div");
   div.className = `message ${role}`;
-  const avatar = role === "user" ? "YOU" : "BOT";
+  const avatar = role === "user" ? "TÚ" : "BOT";
   div.innerHTML = `
     <div class="avatar">${avatar}</div>
-    <div class="bubble">${content.replace(/\n/g, "<br>")}</div>
+    <div class="bubble">${htmlContent}</div>
   `;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
@@ -330,7 +378,7 @@ function addThinking() {
   div.innerHTML = `
     <div class="avatar" style="font-size:11px;font-weight:700;">BOT</div>
     <div class="bubble" style="color:var(--muted)">
-      <div class="spinner"></div> Processing your query through the pipeline...
+      <div class="spinner"></div> Procesando tu consulta en el pipeline...
     </div>
   `;
   container.appendChild(div);
@@ -344,38 +392,39 @@ function removeThinking() {
 
 function renderSteps(steps, loading = false) {
   const el = document.getElementById("stepList");
-  el.innerHTML = steps.map((s, i) => `
+  el.innerHTML = steps.map((s) => `
     <div class="step-item done">
       <div class="step-dot">✓</div>
-      <span>${s}</span>
+      <span>${escapeHtml(s)}</span>
     </div>
-  `).join("") + (loading ? `<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Generating Socratic response...</span></div>` : "");
+  `).join("") + (loading ? `<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Generando respuesta socrática...</span></div>` : "");
+}
+
+function confidenceLabel(score) {
+  if (score >= 0.5) return "alta";
+  if (score >= 0.28) return "media";
+  return "baja";
 }
 
 function renderScores(scores, winner) {
   const el = document.getElementById("scoreBar");
-  const maxScore = Math.max(...Object.values(scores));
-  const minScore = Math.min(...Object.values(scores));
-  const range = maxScore - minScore || 1;
-  // Normalize: winner shows ~85-95%, others proportionally lower
+  // Mostramos el coseno real (0-1), sin renormalizar para que el ganador
+  // "se vea bien" — un score bajo real es información útil, no algo a esconder.
   el.innerHTML = Object.entries(scores).map(([domain, score]) => {
-    const normalized = 40 + ((score - minScore) / range) * 55;
-    const pct = normalized.toFixed(0);
-    const displayPct = (normalized).toFixed(1);
+    const pct = (score * 100).toFixed(1);
     const isWinner = domain === winner;
-    const labels = { vhdl: "VHDL Agent", rf: "RF Agent", network: "Net Agent" };
+    const labels = { vhdl: "Agente VHDL", rf: "Agente RF", network: "Agente Redes" };
     return `
       <div class="score-row">
         <span class="score-label">${labels[domain] || domain}</span>
         <div class="score-track">
-          <div class="score-fill ${isWinner ? 'winner' : ''}" style="width:${pct}%"></div>
+          <div class="score-fill ${isWinner ? 'winner' : ''}" style="width:${Math.max(2, pct)}%"></div>
         </div>
-        <span class="score-val">${displayPct}%</span>
+        <span class="score-val">${pct}%</span>
       </div>
     `;
   }).join("");
 
-  // Highlight active agent chip
   document.querySelectorAll(".agent-chip").forEach(c => c.classList.remove("active"));
   const chipMap = { vhdl: "chip-vhdl", rf: "chip-rf", network: "chip-network" };
   const chipEl = document.getElementById(chipMap[winner]);
@@ -385,13 +434,13 @@ function renderScores(scores, winner) {
 function renderChunks(chunks) {
   const el = document.getElementById("chunkList");
   if (!chunks || chunks.length === 0) {
-    el.innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">No chunks retrieved</div>';
+    el.innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Sin fragmentos recuperados</div>';
     return;
   }
   el.innerHTML = chunks.map((c, i) => `
     <div class="chunk-item">
-      <div class="chunk-score">Chunk ${i+1} — similarity: ${c.score}</div>
-      ${c.text}
+      <div class="chunk-score">Fragmento ${i + 1} — similitud: ${c.score}</div>
+      ${escapeHtml(c.text)}
     </div>
   `).join("");
 }
@@ -404,24 +453,30 @@ async function sendQuery() {
 
   input.value = "";
   btn.disabled = true;
-  addMessage("user", query);
+  addMessage("user", escapeHtml(query));
   addThinking();
 
-  // Reset pipeline panel
-  document.getElementById("stepList").innerHTML = '<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Initializing pipeline...</span></div>';
-  document.getElementById("scoreBar").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Computing...</div>';
-  document.getElementById("chunkList").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Retrieving...</div>';
+  document.getElementById("stepList").innerHTML = '<div class="step-item active"><div class="step-dot"><div class="spinner" style="width:10px;height:10px;border-width:1.5px"></div></div><span>Iniciando pipeline...</span></div>';
+  document.getElementById("scoreBar").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Calculando...</div>';
+  document.getElementById("chunkList").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Recuperando...</div>';
 
   try {
-    renderSteps(["Semantic routing — analyzing query intent..."], true);
+    renderSteps(["Enrutamiento semántico — analizando intención..."], true);
 
     const r = await fetch(`${API}/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query })
+      body: JSON.stringify({ query, history: conversationHistory })
     });
 
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try {
+        const errBody = await r.json();
+        if (errBody.detail) detail = errBody.detail;
+      } catch { /* respuesta sin JSON, usamos el status */ }
+      throw new Error(detail);
+    }
     const data = await r.json();
 
     removeThinking();
@@ -430,16 +485,17 @@ async function sendQuery() {
     renderChunks(data.retrieved_chunks);
 
     const agentLabel = data.routing.agent;
-    const scores = Object.values(data.routing.scores);
-    const minS = Math.min(...scores), maxS = Math.max(...scores);
-    const normConf = (40 + ((data.routing.confidence - minS) / (maxS - minS || 1)) * 55).toFixed(1);
+    const confPct = (data.routing.confidence * 100).toFixed(1);
     addMessage("bot",
-      `<strong>[${agentLabel}]</strong> — Routing confidence: ${normConf}%<br><br>${data.llm_response}`
+      `<strong>[${escapeHtml(agentLabel)}]</strong> — confianza de enrutamiento: ${confPct}% (${confidenceLabel(data.routing.confidence)})<br><br>${escapeHtml(data.llm_response).replace(/\n/g, "<br>")}`
     );
+
+    conversationHistory.push({ role: "user", content: query });
+    conversationHistory.push({ role: "assistant", content: data.llm_response });
   } catch (err) {
     removeThinking();
-    addMessage("bot", `<span style="color:var(--red)">System error: ${err.message}. Make sure the orchestrator is running.</span>`);
-    document.getElementById("stepList").innerHTML = `<div class="step-item" style="color:var(--red)"><div class="step-dot">✗</div><span>${err.message}</span></div>`;
+    addMessage("bot", `<span style="color:var(--red)">Error del sistema: ${escapeHtml(err.message)}. Verifica que el orchestrator esté corriendo y que Ollama tenga el modelo descargado.</span>`);
+    document.getElementById("stepList").innerHTML = `<div class="step-item" style="color:var(--red)"><div class="step-dot">✗</div><span>${escapeHtml(err.message)}</span></div>`;
   }
 
   btn.disabled = false;
