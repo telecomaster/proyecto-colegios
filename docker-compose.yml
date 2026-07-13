@@ -1,8 +1,9 @@
 services:
 
-  # Ollama runs NATIVELY on Windows (not in Docker) to use your RTX 3060 GPU directly.
-  # Download from: https://ollama.com/download
-  # After installing, run: ollama pull llama3
+  # Ollama corre NATIVO en el host (no en Docker) para poder usar la GPU
+  # directamente en Windows, o para simplificar la instalacion en una
+  # Raspberry Pi. Instalar desde: https://ollama.com/download
+  # Luego: ollama pull <modelo>  (ver README.md / .env.example)
 
   orchestrator:
     build: ./orchestrator
@@ -10,11 +11,32 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Points to Ollama running natively on the Windows host
-      - OLLAMA_HOST=http://host.docker.internal:11434
+      # Apunta a Ollama corriendo en el host.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - MODEL_NAME=${MODEL_NAME:-llama3.2:3b-instruct-q4_K_M}
+      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-2048}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-30m}
+      - MAX_CONCURRENT_GENERATIONS=${MAX_CONCURRENT_GENERATIONS:-1}
+      - MIN_ROUTING_CONFIDENCE=${MIN_ROUTING_CONFIDENCE:-0.28}
+      - MIN_CHUNK_SCORE=${MIN_CHUNK_SCORE:-0.20}
+      - MAX_HISTORY_MESSAGES=${MAX_HISTORY_MESSAGES:-8}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+      - LOG_DB_PATH=/app/data/interactions.db
+      - RAG_CACHE_DIR=/app/.rag_cache
+    volumes:
+      # Bind mount: un profesor puede editar/agregar .md aqui y llamar a
+      # POST /reindex sin reconstruir la imagen ni reiniciar el contenedor.
+      - ./orchestrator/knowledge_base:/app/knowledge_base:ro
+      - rag_cache:/app/.rag_cache
+      - interaction_data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     image: nginx:alpine
@@ -23,4 +45,16 @@ services:
       - "3000:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - orchestrator
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  rag_cache:
+  interaction_data:

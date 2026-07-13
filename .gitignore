@@ -5,6 +5,15 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
+
+# Config local (no versionar secretos/paths especificos de una maquina)
+.env
+
+# Datos generados en runtime (se recrean solos; ver docker-compose.yml volumes)
+orchestrator/.rag_cache/
+orchestrator/data/
+*.db
 
 # Docker
 *.log
