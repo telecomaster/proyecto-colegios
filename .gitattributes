@@ -1,0 +1,4 @@
+# Los scripts de shell deben mantener LF si o si: un CRLF rompe el
+# shebang ("#!/usr/bin/env bash\r") y start.sh/stop.sh fallan en la
+# Raspberry Pi aunque en Windows no se note la diferencia.
+*.sh text eol=lf
