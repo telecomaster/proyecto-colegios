@@ -2,45 +2,72 @@
 FastAPI Orchestrator - main entry point for the demo system.
 Handles semantic routing, RAG retrieval, and LLM invocation.
 """
-from fastapi import FastAPI
+import asyncio
+import os
+import sqlite3
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import httpx
-import json
 
-import os
-from router import route_query
+import rag
+import router as router_module
+from domains import DOMAIN_LABELS
 from rag import retrieve
-
-app = FastAPI(title="Proyecto Colegios - LLM Virtual Lab Assistant")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from router import route_query
 
 OLLAMA_URL = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
-MODEL_NAME = "llama3.1:8b"
+MODEL_NAME = os.getenv("MODEL_NAME", "llama3.2:3b-instruct-q4_K_M")
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120"))
 
-SOCRATIC_SYSTEM_PROMPT = """You are a Socratic tutor. You have access to a CONTEXT extracted from the faculty knowledge base. You MUST base your response exclusively on this CONTEXT.
+# Cuantos generaciones concurrentes tolera el modelo. En una Raspberry Pi
+# esto casi siempre debe quedar en 1: Ollama solo puede generar una
+# respuesta a la vez de forma eficiente en ese hardware.
+MAX_CONCURRENT_GENERATIONS = int(os.getenv("MAX_CONCURRENT_GENERATIONS", "1"))
 
-STRICT RULES:
-1. DO NOT write any code. DO NOT give the answer. DO NOT solve the problem.
-2. Read the CONTEXT carefully. Find the key concept the student is missing.
-3. Write 1-2 sentences pointing the student toward that concept without revealing it.
-4. End with ONE question that makes the student think about the specific concept in the CONTEXT.
-5. Maximum 3 sentences total. Be concise.
+# Umbrales de confianza para no inventar respuestas fuera de dominio o sin
+# contexto real en la base de conocimiento. Se calibran con consultas reales;
+# ver DOCUMENTACION.md para el procedimiento.
+MIN_ROUTING_CONFIDENCE = float(os.getenv("MIN_ROUTING_CONFIDENCE", "0.28"))
+MIN_CHUNK_SCORE = float(os.getenv("MIN_CHUNK_SCORE", "0.20"))
 
-CONTEXT FROM KNOWLEDGE BASE:
+# Cuantos mensajes previos (usuario + asistente) se reenvian al LLM como
+# contexto conversacional. Limitado para no agotar num_ctx en la Pi.
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "8"))
+
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+
+LOG_DB_PATH = os.getenv("LOG_DB_PATH", "/app/data/interactions.db")
+
+SOCRATIC_SYSTEM_PROMPT = """Eres un tutor socrático. Tienes acceso a un CONTEXTO extraído de la base de conocimiento de la asignatura. DEBES basar tu respuesta exclusivamente en este CONTEXTO.
+
+REGLAS ESTRICTAS:
+1. NO escribas código. NO des la respuesta. NO resuelvas el problema.
+2. Lee el CONTEXTO con atención. Identifica el concepto clave que le falta al estudiante.
+3. Escribe 1-2 oraciones que orienten al estudiante hacia ese concepto sin revelarlo.
+4. Termina con UNA pregunta que lo haga pensar en el concepto específico del CONTEXTO.
+5. Máximo 3 oraciones en total. Sé breve.
+6. Responde siempre en español.
+
+CONTEXTO DE LA BASE DE CONOCIMIENTO:
 {context}
 
-Remember: Your only job is to ask one guiding question based on the CONTEXT above."""
+Recuerda: tu único trabajo es hacer una pregunta guía basada en el CONTEXTO anterior."""
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
 
 
 class QueryRequest(BaseModel):
     query: str
+    history: list[ChatMessage] = []
 
 
 class QueryResponse(BaseModel):
@@ -51,6 +78,97 @@ class QueryResponse(BaseModel):
     steps: list[str]
 
 
+# --- Cola de generación --------------------------------------------------
+# Reporta cuantas solicitudes estaban en curso o esperando cuando esta
+# solicitud entró, para que el panel de pipeline sea honesto sobre la carga
+# del sistema (relevante con hardware limitado como una Raspberry Pi).
+_generation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+_queue_lock = asyncio.Lock()
+_queue_count = 0
+
+
+async def _enter_queue() -> int:
+    global _queue_count
+    async with _queue_lock:
+        _queue_count += 1
+        return _queue_count
+
+
+async def _leave_queue() -> None:
+    global _queue_count
+    async with _queue_lock:
+        _queue_count = max(0, _queue_count - 1)
+
+
+# --- Registro anónimo de interacciones ------------------------------------
+def _init_log_db() -> None:
+    os.makedirs(os.path.dirname(LOG_DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(LOG_DB_PATH)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                domain TEXT,
+                confidence REAL,
+                query TEXT NOT NULL,
+                response TEXT NOT NULL,
+                chunks_retrieved INTEGER NOT NULL
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _log_interaction_sync(query: str, routing: dict, chunks_retrieved: int, response: str) -> None:
+    conn = sqlite3.connect(LOG_DB_PATH)
+    try:
+        conn.execute(
+            "INSERT INTO interactions (ts, domain, confidence, query, response, chunks_retrieved) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                routing.get("domain"),
+                routing.get("confidence"),
+                query,
+                response,
+                chunks_retrieved,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _log_interaction(query: str, routing: dict, chunks_retrieved: int, response: str) -> None:
+    # No debe poder tumbar una respuesta al estudiante si el logging falla.
+    try:
+        await asyncio.to_thread(_log_interaction_sync, query, routing, chunks_retrieved, response)
+    except Exception as e:
+        print(f"[LOG] No se pudo registrar la interacción: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _init_log_db()
+    router_module.build_centroids()
+    await asyncio.to_thread(rag.build_index)
+    app.state.http_client = httpx.AsyncClient(timeout=OLLAMA_TIMEOUT)
+    yield
+    await app.state.http_client.aclose()
+
+
+app = FastAPI(title="Proyecto Colegios - LLM Virtual Lab Assistant", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "Proyecto Colegios Orchestrator"}
@@ -59,73 +177,127 @@ async def health():
 @app.get("/ollama-status")
 async def ollama_status():
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{OLLAMA_URL}/api/tags")
-            models = r.json().get("models", [])
-            names = [m["name"] for m in models]
-            return {"status": "connected", "models": names}
+        r = await app.state.http_client.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        models = r.json().get("models", [])
+        names = [m["name"] for m in models]
+        return {"status": "connected", "models": names}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+@app.get("/stats")
+async def stats():
+    def _query():
+        conn = sqlite3.connect(LOG_DB_PATH)
+        try:
+            rows = conn.execute("SELECT domain, COUNT(*) FROM interactions GROUP BY domain").fetchall()
+            by_domain = dict(rows)
+            return {"total_interactions": sum(by_domain.values()), "by_domain": by_domain}
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_query)
+
+
+@app.post("/reindex")
+async def reindex():
+    """Reconstruye el índice RAG desde disco sin reiniciar el contenedor.
+    Pensado para que un profesor agregue material a knowledge_base/ (montado
+    como volumen) y lo active sin tocar Docker."""
+    await asyncio.to_thread(rag.build_index, True)
+    return {"status": "ok", "chunks_indexed": rag.chunk_count()}
 
 
 @app.post("/query", response_model=QueryResponse)
 async def process_query(req: QueryRequest):
     steps = []
 
-    # Step 1: Semantic Routing
-    steps.append("Step 1: Semantic routing — analyzing query intent...")
+    # Paso 1: enrutamiento semántico
+    steps.append("Paso 1: enrutamiento semántico — analizando la intención de la consulta...")
     routing = route_query(req.query)
     steps.append(
-        f"Routed to: {routing['agent']} "
-        f"(confidence: {routing['confidence']}, scores: {routing['scores']})"
+        f"Enrutado a: {routing['agent']} "
+        f"(confianza: {routing['confidence']}, scores: {routing['scores']})"
     )
 
-    # Step 2: RAG Retrieval
-    steps.append("Step 2: RAG retrieval — searching knowledge base...")
-    retrieved = retrieve(req.query, k=3)
-    steps.append(f"Retrieved {len(retrieved)} relevant chunks from faculty knowledge base.")
+    if routing["confidence"] < MIN_ROUTING_CONFIDENCE:
+        steps.append("Confianza de enrutamiento por debajo del umbral — no hay un agente claro para esta consulta.")
+        fallback = (
+            "Todavía no tengo material sobre ese tema. Puedo ayudarte con: "
+            + ", ".join(DOMAIN_LABELS.values())
+            + ". ¿Tu pregunta se relaciona con alguno de estos temas?"
+        )
+        await _log_interaction(req.query, routing, 0, fallback)
+        return QueryResponse(query=req.query, routing=routing, retrieved_chunks=[], llm_response=fallback, steps=steps)
+
+    # Paso 2: recuperación RAG, filtrada al dominio enrutado
+    steps.append("Paso 2: recuperación RAG — buscando en la base de conocimiento...")
+    retrieved = retrieve(req.query, k=3, domain=routing["domain"], min_score=MIN_CHUNK_SCORE)
+    steps.append(f"Se recuperaron {len(retrieved)} fragmentos relevantes de la base de conocimiento.")
+
+    if not retrieved:
+        steps.append("Ningún fragmento superó el umbral de relevancia — no hay contexto suficiente.")
+        fallback = (
+            f"Detecté que tu pregunta es sobre {routing['agent']}, pero aún no tengo material "
+            "específico sobre ese punto en la base de conocimiento. ¿Puedes reformular la pregunta, "
+            "o pedirle a tu profesor que agregue ese tema?"
+        )
+        await _log_interaction(req.query, routing, 0, fallback)
+        return QueryResponse(query=req.query, routing=routing, retrieved_chunks=[], llm_response=fallback, steps=steps)
 
     context = "\n\n---\n\n".join(
-        [f"[Chunk {i+1} | score={r['score']}]\n{r['chunk']}"
-         for i, r in enumerate(retrieved)]
+        [f"[Fragmento {i + 1} | score={r['score']}]\n{r['chunk']}" for i, r in enumerate(retrieved)]
     )
 
-    # Step 3: LLM Generation (Socratic)
-    steps.append(f"Step 3: Invoking {routing['agent']} with Socratic prompting...")
+    # Paso 3: generación con el LLM (socrática)
+    steps.append(f"Paso 3: invocando al {routing['agent']} con instrucciones socráticas...")
     system_prompt = SOCRATIC_SYSTEM_PROMPT.format(context=context)
-    llm_response = await call_ollama(req.query, system_prompt)
-    steps.append("Response generated.")
+    history = [m.model_dump() for m in req.history[-MAX_HISTORY_MESSAGES:]]
+
+    queue_position = await _enter_queue()
+    if queue_position > 1:
+        steps.append(f"En cola de generación: {queue_position - 1} solicitud(es) por delante.")
+    try:
+        llm_response = await call_ollama(req.query, system_prompt, history)
+    finally:
+        await _leave_queue()
+    steps.append("Respuesta generada.")
+
+    await _log_interaction(req.query, routing, len(retrieved), llm_response)
 
     return QueryResponse(
         query=req.query,
         routing=routing,
-        retrieved_chunks=[{"text": r["chunk"][:200] + "...", "score": r["score"]} for r in retrieved],
+        retrieved_chunks=[{"text": r["chunk"][:200] + ("..." if len(r["chunk"]) > 200 else ""), "score": r["score"]} for r in retrieved],
         llm_response=llm_response,
         steps=steps,
     )
 
 
-async def call_ollama(user_message: str, system_prompt: str) -> str:
+async def call_ollama(user_message: str, system_prompt: str, history: list[dict]) -> str:
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
     payload = {
         "model": MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
             "temperature": 0.1,
             "num_predict": 200,
-        }
+            "num_ctx": OLLAMA_NUM_CTX,
+        },
     }
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+    async with _generation_semaphore:
+        try:
+            r = await app.state.http_client.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
             r.raise_for_status()
-            data = r.json()
-            return data["message"]["content"]
-    except Exception as e:
-        return f"[LLM Error] Could not reach Ollama: {str(e)}"
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"No se pudo contactar al modelo (Ollama): {e}")
+        data = r.json()
+        return data["message"]["content"]
 
 
 if __name__ == "__main__":

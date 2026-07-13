@@ -97,34 +97,3 @@ in the sensitivity list of the same process.
 | `unsigned` | Unsigned arithmetic type |
 | `to_integer()` | Converts unsigned to integer |
 | `process(...)` | Sequential logic block with sensitivity list |
-
----
-
-### 6. RF Signal Analysis - Modulation Concepts
-
-**Amplitude Modulation (AM):** The carrier amplitude varies proportionally to the message signal.
-Formula: `s(t) = Ac[1 + ka*m(t)]cos(2πfc*t)`
-
-**Frequency Modulation (FM):** The carrier frequency varies proportionally to the message signal.
-The bandwidth is determined by Carson's rule: `BT = 2(Δf + fm)`
-
-**Spectrum Analysis:** Use FFT to analyze frequency components. Key parameters:
-- Center frequency (fc)
-- Bandwidth (BW)
-- Signal-to-Noise Ratio (SNR)
-
----
-
-### 7. Network Protocols - TCP/IP Stack
-
-**TCP Three-Way Handshake:**
-1. Client sends SYN packet
-2. Server responds with SYN-ACK
-3. Client sends ACK
-
-**Routing Protocols:**
-- **OSPF:** Link-state, uses Dijkstra algorithm, administrative distance = 110
-- **RIP:** Distance-vector, max 15 hops, administrative distance = 120
-- **BGP:** Path-vector, used between autonomous systems (AS)
-
-**Key metrics:** Latency, throughput, jitter, packet loss rate
