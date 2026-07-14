@@ -460,6 +460,10 @@ async function sendQuery() {
   document.getElementById("scoreBar").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Calculando...</div>';
   document.getElementById("chunkList").innerHTML = '<div class="empty-state" style="padding:10px 0;font-size:12px;">Recuperando...</div>';
 
+  let latestRouting = null;
+  let streamStarted = false;
+  let responseTextEl = null;
+
   try {
     renderSteps(["Enrutamiento semántico — analizando intención..."], true);
 
@@ -477,21 +481,52 @@ async function sendQuery() {
       } catch { /* respuesta sin JSON, usamos el status */ }
       throw new Error(detail);
     }
-    const data = await r.json();
 
-    removeThinking();
-    renderSteps(data.steps);
-    renderScores(data.routing.scores, data.routing.domain);
-    renderChunks(data.retrieved_chunks);
+    // El backend responde con Server-Sent Events (una respuesta por línea
+    // "data: {...}") para que el texto del tutor aparezca token a token en
+    // vez de esperar toda la generación del LLM de una sola vez.
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    const agentLabel = data.routing.agent;
-    const confPct = (data.routing.confidence * 100).toFixed(1);
-    addMessage("bot",
-      `<strong>[${escapeHtml(agentLabel)}]</strong> — confianza de enrutamiento: ${confPct}% (${confidenceLabel(data.routing.confidence)})<br><br>${escapeHtml(data.llm_response).replace(/\n/g, "<br>")}`
-    );
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    conversationHistory.push({ role: "user", content: query });
-    conversationHistory.push({ role: "assistant", content: data.llm_response });
+      let sepIndex;
+      while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sepIndex);
+        buffer = buffer.slice(sepIndex + 2);
+        const dataLine = rawEvent.split("\n").find(l => l.startsWith("data: "));
+        if (!dataLine) continue;
+        const evt = JSON.parse(dataLine.slice(6));
+
+        if (evt.type === "meta") {
+          latestRouting = evt.routing;
+          renderSteps(evt.steps, true);
+          renderScores(evt.routing.scores, evt.routing.domain);
+          renderChunks(evt.retrieved_chunks);
+        } else if (evt.type === "token") {
+          if (!streamStarted) {
+            streamStarted = true;
+            removeThinking();
+            const confPct = (latestRouting.confidence * 100).toFixed(1);
+            responseTextEl = addStreamingMessage(latestRouting.agent, confPct, confidenceLabel(latestRouting.confidence));
+          }
+          responseTextEl.innerHTML += escapeHtml(evt.delta).replace(/\n/g, "<br>");
+          const chatEl = document.getElementById("chatMessages");
+          chatEl.scrollTop = chatEl.scrollHeight;
+        } else if (evt.type === "done") {
+          renderSteps(evt.steps);
+          renderChunks(evt.retrieved_chunks);
+          conversationHistory.push({ role: "user", content: query });
+          conversationHistory.push({ role: "assistant", content: evt.full_response });
+        } else if (evt.type === "error") {
+          throw new Error(evt.detail);
+        }
+      }
+    }
   } catch (err) {
     removeThinking();
     addMessage("bot", `<span style="color:var(--red)">Error del sistema: ${escapeHtml(err.message)}. Verifica que el orchestrator esté corriendo y que Ollama tenga el modelo descargado.</span>`);
@@ -500,6 +535,19 @@ async function sendQuery() {
 
   btn.disabled = false;
   input.focus();
+}
+
+function addStreamingMessage(agentLabel, confPct, confLabel) {
+  const container = document.getElementById("chatMessages");
+  const div = document.createElement("div");
+  div.className = "message bot";
+  div.innerHTML = `
+    <div class="avatar" style="font-size:11px;font-weight:700;">BOT</div>
+    <div class="bubble"><strong>[${escapeHtml(agentLabel)}]</strong> — confianza de enrutamiento: ${confPct}% (${confLabel})<br><br><span id="streamText"></span></div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div.querySelector("#streamText");
 }
 
 document.getElementById("queryInput").addEventListener("keydown", e => {

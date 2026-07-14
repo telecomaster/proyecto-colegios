@@ -113,7 +113,7 @@ Los umbrales por defecto (`MIN_ROUTING_CONFIDENCE=0.28`, `MIN_CHUNK_SCORE=0.20`)
 Estos números **van a cambiar** en cuanto se reemplacen los dominios por asignaturas reales de colegio, porque dependen del vocabulario de las keywords en `domains.py` y del contenido real de `knowledge_base/`. Procedimiento recomendado al agregar una asignatura nueva:
 
 1. Escribir 5-10 preguntas típicas de esa asignatura y 5-10 preguntas claramente ajenas.
-2. Pegarlas una por una en el chat (o con `curl -X POST /query`) y mirar el campo `routing.confidence` en la respuesta (o el panel "Scores de Enrutamiento Semántico" en la UI).
+2. Pegarlas una por una en el chat (o con `curl -N -X POST /query -d '{"query": "..."}'`, usando `-N` para ver el streaming) y mirar el campo `confidence` del primer evento `meta` (o el panel "Scores de Enrutamiento Semántico" en la UI).
 3. Elegir un umbral entre el mínimo de las preguntas en-dominio y el máximo de las preguntas fuera de dominio.
 4. Ajustar `MIN_ROUTING_CONFIDENCE` / `MIN_CHUNK_SCORE` en `.env` y reiniciar.
 
@@ -201,7 +201,7 @@ Editar `MODEL_NAME` en `.env` y hacer `ollama pull <nuevo-modelo>` antes de rein
 |---|---|---|
 | `/health` | GET | Estado del orchestrator. |
 | `/ollama-status` | GET | Verifica conectividad con Ollama y lista modelos disponibles. |
-| `/query` | POST | `{query, history}` → routing + chunks recuperados + respuesta socrática + pasos del pipeline. |
+| `/query` | POST | `{query, history}` → respuesta en streaming (Server-Sent Events, `text/event-stream`). Eventos `meta` (routing + chunks + pasos), `token` (fragmento de la respuesta), `done` (respuesta completa + pasos finales) y `error`. |
 | `/reindex` | POST | Reconstruye el índice RAG desde `knowledge_base/` sin reiniciar el contenedor. |
 | `/stats` | GET | Conteo anónimo de interacciones por dominio (base para un futuro panel docente). |
 

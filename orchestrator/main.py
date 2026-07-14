@@ -3,14 +3,16 @@ FastAPI Orchestrator - main entry point for the demo system.
 Handles semantic routing, RAG retrieval, and LLM invocation.
 """
 import asyncio
+import json
 import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import rag
@@ -68,14 +70,6 @@ class ChatMessage(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     history: list[ChatMessage] = []
-
-
-class QueryResponse(BaseModel):
-    query: str
-    routing: dict
-    retrieved_chunks: list
-    llm_response: str
-    steps: list[str]
 
 
 # --- Cola de generación --------------------------------------------------
@@ -208,8 +202,16 @@ async def reindex():
     return {"status": "ok", "chunks_indexed": rag.chunk_count()}
 
 
-@app.post("/query", response_model=QueryResponse)
-async def process_query(req: QueryRequest):
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _shorten(chunk: dict) -> dict:
+    text = chunk["chunk"]
+    return {"text": text[:200] + ("..." if len(text) > 200 else ""), "score": chunk["score"]}
+
+
+async def _stream_query(req: QueryRequest):
     steps = []
 
     # Paso 1: enrutamiento semántico
@@ -219,6 +221,7 @@ async def process_query(req: QueryRequest):
         f"Enrutado a: {routing['agent']} "
         f"(confianza: {routing['confidence']}, scores: {routing['scores']})"
     )
+    yield _sse({"type": "meta", "routing": routing, "steps": steps, "retrieved_chunks": []})
 
     if routing["confidence"] < MIN_ROUTING_CONFIDENCE:
         steps.append("Confianza de enrutamiento por debajo del umbral — no hay un agente claro para esta consulta.")
@@ -227,13 +230,17 @@ async def process_query(req: QueryRequest):
             + ", ".join(DOMAIN_LABELS.values())
             + ". ¿Tu pregunta se relaciona con alguno de estos temas?"
         )
+        yield _sse({"type": "token", "delta": fallback})
+        yield _sse({"type": "done", "steps": steps, "retrieved_chunks": [], "full_response": fallback})
         await _log_interaction(req.query, routing, 0, fallback)
-        return QueryResponse(query=req.query, routing=routing, retrieved_chunks=[], llm_response=fallback, steps=steps)
+        return
 
     # Paso 2: recuperación RAG, filtrada al dominio enrutado
     steps.append("Paso 2: recuperación RAG — buscando en la base de conocimiento...")
     retrieved = retrieve(req.query, k=3, domain=routing["domain"], min_score=MIN_CHUNK_SCORE)
     steps.append(f"Se recuperaron {len(retrieved)} fragmentos relevantes de la base de conocimiento.")
+    retrieved_chunks = [_shorten(r) for r in retrieved]
+    yield _sse({"type": "meta", "routing": routing, "steps": steps, "retrieved_chunks": retrieved_chunks})
 
     if not retrieved:
         steps.append("Ningún fragmento superó el umbral de relevancia — no hay contexto suficiente.")
@@ -242,14 +249,16 @@ async def process_query(req: QueryRequest):
             "específico sobre ese punto en la base de conocimiento. ¿Puedes reformular la pregunta, "
             "o pedirle a tu profesor que agregue ese tema?"
         )
+        yield _sse({"type": "token", "delta": fallback})
+        yield _sse({"type": "done", "steps": steps, "retrieved_chunks": [], "full_response": fallback})
         await _log_interaction(req.query, routing, 0, fallback)
-        return QueryResponse(query=req.query, routing=routing, retrieved_chunks=[], llm_response=fallback, steps=steps)
+        return
 
     context = "\n\n---\n\n".join(
         [f"[Fragmento {i + 1} | score={r['score']}]\n{r['chunk']}" for i, r in enumerate(retrieved)]
     )
 
-    # Paso 3: generación con el LLM (socrática)
+    # Paso 3: generación con el LLM (socrática), token a token
     steps.append(f"Paso 3: invocando al {routing['agent']} con instrucciones socráticas...")
     system_prompt = SOCRATIC_SYSTEM_PROMPT.format(context=context)
     history = [m.model_dump() for m in req.history[-MAX_HISTORY_MESSAGES:]]
@@ -257,24 +266,34 @@ async def process_query(req: QueryRequest):
     queue_position = await _enter_queue()
     if queue_position > 1:
         steps.append(f"En cola de generación: {queue_position - 1} solicitud(es) por delante.")
+    yield _sse({"type": "meta", "routing": routing, "steps": steps, "retrieved_chunks": retrieved_chunks})
+
+    full_response = ""
     try:
-        llm_response = await call_ollama(req.query, system_prompt, history)
-    finally:
+        async for delta in call_ollama_stream(req.query, system_prompt, history):
+            full_response += delta
+            yield _sse({"type": "token", "delta": delta})
+    except httpx.HTTPError as e:
         await _leave_queue()
+        yield _sse({"type": "error", "detail": f"No se pudo contactar al modelo (Ollama): {e}"})
+        return
+    await _leave_queue()
+
     steps.append("Respuesta generada.")
+    yield _sse({"type": "done", "steps": steps, "retrieved_chunks": retrieved_chunks, "full_response": full_response})
+    await _log_interaction(req.query, routing, len(retrieved), full_response)
 
-    await _log_interaction(req.query, routing, len(retrieved), llm_response)
 
-    return QueryResponse(
-        query=req.query,
-        routing=routing,
-        retrieved_chunks=[{"text": r["chunk"][:200] + ("..." if len(r["chunk"]) > 200 else ""), "score": r["score"]} for r in retrieved],
-        llm_response=llm_response,
-        steps=steps,
+@app.post("/query")
+async def process_query(req: QueryRequest):
+    return StreamingResponse(
+        _stream_query(req),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def call_ollama(user_message: str, system_prompt: str, history: list[dict]) -> str:
+async def call_ollama_stream(user_message: str, system_prompt: str, history: list[dict]):
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -282,7 +301,7 @@ async def call_ollama(user_message: str, system_prompt: str, history: list[dict]
     payload = {
         "model": MODEL_NAME,
         "messages": messages,
-        "stream": False,
+        "stream": True,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
             "temperature": 0.1,
@@ -291,13 +310,19 @@ async def call_ollama(user_message: str, system_prompt: str, history: list[dict]
         },
     }
     async with _generation_semaphore:
-        try:
-            r = await app.state.http_client.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
+        async with app.state.http_client.stream(
+            "POST", f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
+        ) as r:
             r.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=503, detail=f"No se pudo contactar al modelo (Ollama): {e}")
-        data = r.json()
-        return data["message"]["content"]
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                content = data.get("message", {}).get("content", "")
+                if content:
+                    yield content
+                if data.get("done"):
+                    break
 
 
 if __name__ == "__main__":
